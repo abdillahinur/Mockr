@@ -1,0 +1,41 @@
+{
+  "routes": {
+    "/api/users": {
+      "method": "GET",
+      "status": 200,
+      "response": {
+        "users": [
+          {"id": 1, "name": "John Doe", "email": "john@example.com"},
+          {"id": 2, "name": "Jane Smith", "email": "jane@example.com"}
+        ]
+      }
+    },
+    "/api/users/1": {
+      "method": "GET",
+      "status": 200,
+      "delay": 500,
+      "response": {
+        "id": 1,
+        "name": "John Doe",
+        "email": "john@example.com"
+      }
+    },
+    "/api/users": {
+      "method": "POST",
+      "status": 201,
+      "response": {
+        "id": 3,
+        "name": "New User",
+        "email": "new@example.com"
+      }
+    },
+    "/api/error": {
+      "method": "GET",
+      "status": 500,
+      "response": {
+        "error": "Internal server error",
+        "message": "Something went wrong"
+      }
+    }
+  }
+}
