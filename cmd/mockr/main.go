@@ -3,7 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
+	"strconv"
+
+	"github.com/abdillahi-nur/mockr/internal/server"
 )
 
 // Route represents a mock API route configuration
@@ -71,5 +75,30 @@ func main() {
 		}
 		fmt.Println()
 		fmt.Printf("    Response: %v\n", route.Response)
+	}
+
+	// Convert to server.Route format
+	serverRoutes := make(map[string]server.Route)
+	for path, route := range config.Routes {
+		serverRoutes[path] = server.Route{
+			Method:   route.Method,
+			Status:   route.Status,
+			Delay:    route.Delay,
+			Response: route.Response,
+		}
+	}
+
+	// Get port from environment or use default
+	port := 3000
+	if portStr := os.Getenv("PORT"); portStr != "" {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = p
+		}
+	}
+
+	// Start the server
+	mockServer := server.New(serverRoutes, port)
+	if err := mockServer.Start(); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
 	}
 }
