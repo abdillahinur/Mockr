@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/abdillahi-nur/mockr/internal/server"
+	"github.com/fsnotify/fsnotify"
 )
 
 // Route represents a mock API route configuration
@@ -96,9 +98,121 @@ func main() {
 		}
 	}
 
+	// Create reload callback
+	onReload := func(newConfig map[string]server.Route) {
+		fmt.Printf("🔄 config reloaded (%d routes)\n", len(newConfig))
+	}
+
 	// Start the server
-	mockServer := server.New(serverRoutes, port)
+	mockServer := server.New(serverRoutes, port, onReload)
+
+	// Start file watcher for hot reload
+	go watchConfigFile(configFile, mockServer)
+
 	if err := mockServer.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+// watchConfigFile watches the config file for changes and reloads the server
+func watchConfigFile(configFile string, mockServer *server.Server) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Error creating watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	// Watch the directory containing the config file
+	configDir := "."
+	if lastSlash := len(configFile) - 1; lastSlash >= 0 {
+		for i := lastSlash; i >= 0; i-- {
+			if configFile[i] == '/' || configFile[i] == '\\' {
+				configDir = configFile[:i]
+				configFile = configFile[i+1:]
+				break
+			}
+		}
+	}
+
+	err = watcher.Add(configDir)
+	if err != nil {
+		log.Printf("Error adding directory to watcher: %v", err)
+		return
+	}
+
+	log.Printf("Watching config file: %s", configFile)
+
+	// Debounce timer to avoid multiple reloads
+	var reloadTimer *time.Timer
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Check if the config file was modified
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				// Extract filename from event path
+				eventFile := event.Name
+				if lastSlash := len(eventFile) - 1; lastSlash >= 0 {
+					for i := lastSlash; i >= 0; i-- {
+						if eventFile[i] == '/' || eventFile[i] == '\\' {
+							eventFile = eventFile[i+1:]
+							break
+						}
+					}
+				}
+
+				if eventFile == configFile {
+					// Debounce reload to avoid multiple rapid reloads
+					if reloadTimer != nil {
+						reloadTimer.Stop()
+					}
+					reloadTimer = time.AfterFunc(100*time.Millisecond, func() {
+						reloadConfig(configFile, mockServer)
+					})
+				}
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("Watcher error: %v", err)
+		}
+	}
+}
+
+// reloadConfig reloads the configuration and updates the server
+func reloadConfig(configFile string, mockServer *server.Server) {
+	// Read config file
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		log.Printf("Error reading config file during reload: %v", err)
+		return
+	}
+
+	// Parse JSON config
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		log.Printf("Error parsing config file during reload: %v", err)
+		return
+	}
+
+	// Convert to server.Route format
+	serverRoutes := make(map[string]server.Route)
+	for path, route := range config.Routes {
+		serverRoutes[path] = server.Route{
+			Method:   route.Method,
+			Status:   route.Status,
+			Delay:    route.Delay,
+			Response: route.Response,
+		}
+	}
+
+	// Reload server configuration
+	mockServer.ReloadConfig(serverRoutes)
 }
