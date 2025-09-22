@@ -43,6 +43,28 @@
       "response": {
         "message": "Hot reload is working perfectly!"
       }
+    },
+    "/api/case-test": {
+      "method": "post",
+      "status": 201,
+      "delay": 200,
+      "response": {
+        "message": "Case-insensitive method test",
+        "method": "POST"
+      }
+    },
+    "/api/no-status": {
+      "method": "GET",
+      "response": {
+        "message": "Default status 200"
+      }
+    },
+    "/api/no-delay": {
+      "method": "GET",
+      "status": 202,
+      "response": {
+        "message": "No delay, custom status"
+      }
     }
   }
 }

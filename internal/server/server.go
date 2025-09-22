@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,8 +58,9 @@ func (s *Server) registerRoutes() {
 
 	// Register routes dynamically
 	for path, route := range s.config {
-		switch route.Method {
-		case "GET", "POST":
+		method := strings.ToUpper(route.Method)
+		switch method {
+		case "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS":
 			s.mux.HandleFunc(path, s.createHandler(route))
 		default:
 			log.Printf("Warning: Unsupported method '%s' for route '%s', skipping", route.Method, path)
@@ -98,20 +100,20 @@ func (s *Server) logRoutes() {
 // createHandler creates an HTTP handler for a specific route
 func (s *Server) createHandler(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Apply delay if configured
+		// Apply delay if configured (before setting headers)
 		if route.Delay > 0 {
 			time.Sleep(time.Duration(route.Delay) * time.Millisecond)
 		}
 
+		// Set content type to JSON (before status code)
+		w.Header().Set("Content-Type", "application/json")
+
 		// Set status code
 		status := route.Status
 		if status == 0 {
-			status = 200
+			status = 200 // default status
 		}
 		w.WriteHeader(status)
-
-		// Set content type to JSON
-		w.Header().Set("Content-Type", "application/json")
 
 		// Marshal and write response
 		if err := json.NewEncoder(w).Encode(route.Response); err != nil {
