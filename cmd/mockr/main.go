@@ -125,11 +125,12 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 
 	// Watch the directory containing the config file
 	configDir := "."
+	configFileName := configFile
 	if lastSlash := len(configFile) - 1; lastSlash >= 0 {
 		for i := lastSlash; i >= 0; i-- {
 			if configFile[i] == '/' || configFile[i] == '\\' {
 				configDir = configFile[:i]
-				configFile = configFile[i+1:]
+				configFileName = configFile[i+1:]
 				break
 			}
 		}
@@ -141,7 +142,7 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 		return
 	}
 
-	log.Printf("Watching config file: %s", configFile)
+	log.Printf("Watching config file: %s", configFileName)
 
 	// Debounce timer to avoid multiple reloads
 	var reloadTimer *time.Timer
@@ -166,7 +167,7 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 					}
 				}
 
-				if eventFile == configFile {
+				if eventFile == configFileName {
 					// Debounce reload to avoid multiple rapid reloads
 					if reloadTimer != nil {
 						reloadTimer.Stop()
