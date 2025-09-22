@@ -1,5 +1,19 @@
 {
   "routes": {
+    "/ping": {
+      "method": "GET",
+      "response": {
+        "ok": true
+      }
+    },
+    "/fail": {
+      "method": "GET",
+      "status": 500,
+      "delay": 800,
+      "response": {
+        "error": "boom"
+      }
+    },
     "/api/users": {
       "method": "GET",
       "status": 200,
@@ -64,6 +78,12 @@
       "status": 202,
       "response": {
         "message": "No delay, custom status"
+      }
+    },
+    "/bad": {
+      "method": "WHATEVER",
+      "response": {
+        "x": 1
       }
     }
   }
