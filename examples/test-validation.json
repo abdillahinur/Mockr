@@ -1,0 +1,40 @@
+{
+  "routes": {
+    "/api/valid": {
+      "method": "GET",
+      "status": 200,
+      "response": {
+        "message": "This route is valid"
+      }
+    },
+    "/api/invalid-method": {
+      "method": "INVALID",
+      "status": 200,
+      "response": {
+        "message": "This should be skipped"
+      }
+    },
+    "/api/invalid-status": {
+      "method": "GET",
+      "status": 999,
+      "response": {
+        "message": "This should use default status"
+      }
+    },
+    "/api/negative-delay": {
+      "method": "GET",
+      "delay": -100,
+      "response": {
+        "message": "This should use 0 delay"
+      }
+    },
+    "/api/good": {
+      "method": "POST",
+      "status": 201,
+      "delay": 50,
+      "response": {
+        "message": "This is a good route"
+      }
+    }
+  }
+}

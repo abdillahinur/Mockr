@@ -2,10 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/abdillahi-nur/mockr/internal/server"
@@ -25,19 +26,45 @@ type Config struct {
 	Routes map[string]Route `json:"routes"`
 }
 
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: mockr start [flags] <configFile>\n")
+	fmt.Fprintf(os.Stderr, "\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "  -port int\n")
+	fmt.Fprintf(os.Stderr, "        Port to run the server on (default 3000)\n")
+	fmt.Fprintf(os.Stderr, "  -watch\n")
+	fmt.Fprintf(os.Stderr, "        Enable hot reload file watching (default true)\n")
+}
+
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: mockr start <configFile>\n")
+	if len(os.Args) < 2 {
+		printUsage()
 		os.Exit(1)
 	}
 
 	if os.Args[1] != "start" {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
-		fmt.Fprintf(os.Stderr, "Usage: mockr start <configFile>\n")
+		printUsage()
 		os.Exit(1)
 	}
 
-	configFile := os.Args[2]
+	// Parse flags
+	portFlag := flag.Int("port", 3000, "Port to run the server on")
+	watchFlag := flag.Bool("watch", true, "Enable hot reload file watching")
+	
+	// Parse flags from os.Args[2:] (skip "start" command)
+	flag.CommandLine.Parse(os.Args[2:])
+
+	// Get config file from remaining args
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "Error: config file required\n")
+		printUsage()
+		os.Exit(1)
+	}
+	configFile := args[0]
+
+	port := *portFlag
+	watch := *watchFlag
 
 	// Check if config file exists
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -59,42 +86,86 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Print parsed routes
-	fmt.Println("Loaded mock routes:")
+	// Validate and filter routes
+	validRoutes := make(map[string]Route)
+	skippedCount := 0
+
 	for path, route := range config.Routes {
-		status := route.Status
-		if status == 0 {
-			status = 200 // default status
+		// Validate method
+		method := strings.ToUpper(route.Method)
+		validMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+		isValidMethod := false
+		for _, validMethod := range validMethods {
+			if method == validMethod {
+				isValidMethod = true
+				break
+			}
 		}
-		delay := route.Delay
-		if delay == 0 {
-			delay = 0
+
+		if !isValidMethod {
+			log.Printf("Warning: Unsupported method '%s' for route '%s', skipping", route.Method, path)
+			skippedCount++
+			continue
 		}
-		
-		fmt.Printf("  %s [%s] -> Status: %d", path, route.Method, status)
-		if delay > 0 {
-			fmt.Printf(", Delay: %dms", delay)
+
+		// Validate status code (must be valid HTTP status)
+		if route.Status != 0 && (route.Status < 100 || route.Status > 599) {
+			log.Printf("Warning: Invalid status code %d for route '%s', using default 200", route.Status, path)
+			route.Status = 200
 		}
-		fmt.Println()
-		fmt.Printf("    Response: %v\n", route.Response)
+
+		// Validate delay (must be non-negative)
+		if route.Delay < 0 {
+			log.Printf("Warning: Negative delay %d for route '%s', using 0", route.Delay, path)
+			route.Delay = 0
+		}
+
+		validRoutes[path] = route
 	}
 
-	// Convert to server.Route format
+	// Print table header
+	fmt.Printf("Loaded %d mock routes", len(validRoutes))
+	if skippedCount > 0 {
+		fmt.Printf(" (skipped %d invalid routes)", skippedCount)
+	}
+	fmt.Println()
+	fmt.Println("┌────────┬──────────────────────────┬────────┬────────┐")
+	fmt.Println("│ METHOD │ PATH                     │ STATUS │ DELAY  │")
+	fmt.Println("├────────┼──────────────────────────┼────────┼────────┤")
+
+	// Print routes in table format
+	for path, route := range validRoutes {
+		method := strings.ToUpper(route.Method)
+		status := route.Status
+		if status == 0 {
+			status = 200
+		}
+
+		delayStr := ""
+		if route.Delay > 0 {
+			delayStr = fmt.Sprintf("%dms", route.Delay)
+		} else {
+			delayStr = "-"
+		}
+
+		// Truncate long paths
+		displayPath := path
+		if len(displayPath) > 24 {
+			displayPath = displayPath[:21] + "..."
+		}
+
+		fmt.Printf("│ %-6s │ %-24s │ %-6d │ %-6s │\n", method, displayPath, status, delayStr)
+	}
+	fmt.Println("└────────┴──────────────────────────┴────────┴────────┘")
+
+	// Convert valid routes to server.Route format
 	serverRoutes := make(map[string]server.Route)
-	for path, route := range config.Routes {
+	for path, route := range validRoutes {
 		serverRoutes[path] = server.Route{
 			Method:   route.Method,
 			Status:   route.Status,
 			Delay:    route.Delay,
 			Response: route.Response,
-		}
-	}
-
-	// Get port from environment or use default
-	port := 3000
-	if portStr := os.Getenv("PORT"); portStr != "" {
-		if p, err := strconv.Atoi(portStr); err == nil {
-			port = p
 		}
 	}
 
@@ -106,8 +177,10 @@ func main() {
 	// Start the server
 	mockServer := server.New(serverRoutes, port, onReload)
 
-	// Start file watcher for hot reload
-	go watchConfigFile(configFile, mockServer)
+	// Start file watcher for hot reload if enabled
+	if watch {
+		go watchConfigFile(configFile, mockServer)
+	}
 
 	if err := mockServer.Start(); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
@@ -203,9 +276,43 @@ func reloadConfig(configFile string, mockServer *server.Server) {
 		return
 	}
 
+	// Validate and filter routes (same logic as main)
+	validRoutes := make(map[string]Route)
+	for path, route := range config.Routes {
+		// Validate method
+		method := strings.ToUpper(route.Method)
+		validMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+		isValidMethod := false
+		for _, validMethod := range validMethods {
+			if method == validMethod {
+				isValidMethod = true
+				break
+			}
+		}
+
+		if !isValidMethod {
+			log.Printf("Warning: Unsupported method '%s' for route '%s', skipping", route.Method, path)
+			continue
+		}
+
+		// Validate status code
+		if route.Status != 0 && (route.Status < 100 || route.Status > 599) {
+			log.Printf("Warning: Invalid status code %d for route '%s', using default 200", route.Status, path)
+			route.Status = 200
+		}
+
+		// Validate delay
+		if route.Delay < 0 {
+			log.Printf("Warning: Negative delay %d for route '%s', using 0", route.Delay, path)
+			route.Delay = 0
+		}
+
+		validRoutes[path] = route
+	}
+
 	// Convert to server.Route format
 	serverRoutes := make(map[string]server.Route)
-	for path, route := range config.Routes {
+	for path, route := range validRoutes {
 		serverRoutes[path] = server.Route{
 			Method:   route.Method,
 			Status:   route.Status,
