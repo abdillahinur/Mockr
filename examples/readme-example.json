@@ -1,0 +1,17 @@
+{
+  "routes": {
+    "/ping": {
+      "method": "GET",
+      "status": 200,
+      "response": { "ok": true }
+    },
+    "/users": {
+      "method": "GET",
+      "delay": 1000,
+      "response": [
+        { "id": 1, "name": "Alice" },
+        { "id": 2, "name": "Bob" }
+      ]
+    }
+  }
+}
