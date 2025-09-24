@@ -370,6 +370,37 @@ docker run --read-only --tmpfs /tmp -p 3000:3000 -v $(pwd)/config.json:/app/mock
 - CI/CD ephemeral mode
 - Playground GUI (/__mockr)
 
+## 📦 Releases
+
+### v0.1.0 - Production Ready (Latest)
+**Download:** [GitHub Releases](https://github.com/abdillahinur/Mockr/releases/tag/v0.1.0)
+
+**Pre-built binaries available for:**
+- Windows 64-bit (`mockr-windows-amd64.exe`)
+- Linux 64-bit (`mockr-linux-amd64`) 
+- Linux ARM64 (`mockr-linux-arm64`) - Raspberry Pi compatible
+- macOS Intel (`mockr-darwin-amd64`)
+- macOS Apple Silicon (`mockr-darwin-arm64`) - M1/M2 Macs
+
+**Quick install:**
+```bash
+# Linux/macOS
+curl -L https://github.com/abdillahinur/Mockr/releases/download/v0.1.0/mockr-linux-amd64 -o mockr
+chmod +x mockr
+./mockr start examples/mockr.json
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri "https://github.com/abdillahinur/Mockr/releases/download/v0.1.0/mockr-windows-amd64.exe" -OutFile "mockr.exe"
+./mockr.exe start examples/mockr.json
+```
+
+**Verify downloads:**
+```bash
+# Download checksums and verify
+curl -L https://github.com/abdillahinur/Mockr/releases/download/v0.1.0/checksums.txt -o checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
+
 ## 🤝 Contributing
 Contributions are welcome!  
 Open an issue to suggest features, report bugs, or discuss improvements.
