@@ -1,38 +1,34 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strings"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
+	"github.com/abdillahi-nur/mockr/internal/config"
 	"github.com/abdillahi-nur/mockr/internal/server"
 	"github.com/fsnotify/fsnotify"
 )
 
-// Route represents a mock API route configuration
-type Route struct {
-	Method   string      `json:"method"`
-	Status   int         `json:"status,omitempty"`
-	Delay    int         `json:"delay,omitempty"`
-	Response interface{} `json:"response"`
-}
-
-// Config represents the mock server configuration
-type Config struct {
-	Routes map[string]Route `json:"routes"`
-}
-
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: mockr start [flags] <configFile>\n")
 	fmt.Fprintf(os.Stderr, "\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "  -host string\n")
+	fmt.Fprintf(os.Stderr, "        Host to bind to (default \"127.0.0.1\")\n")
 	fmt.Fprintf(os.Stderr, "  -port int\n")
 	fmt.Fprintf(os.Stderr, "        Port to run the server on (default 3000)\n")
 	fmt.Fprintf(os.Stderr, "  -watch\n")
 	fmt.Fprintf(os.Stderr, "        Enable hot reload file watching (default true)\n")
+	fmt.Fprintf(os.Stderr, "  -rate-limit float\n")
+	fmt.Fprintf(os.Stderr, "        Rate limit in requests per second (default 0 = disabled)\n")
+	fmt.Fprintf(os.Stderr, "  -burst int\n")
+	fmt.Fprintf(os.Stderr, "        Burst size for rate limiting (default 0; only used if rate-limit > 0)\n")
 }
 
 func main() {
@@ -48,9 +44,12 @@ func main() {
 	}
 
 	// Parse flags
+	hostFlag := flag.String("host", "127.0.0.1", "Host to bind to")
 	portFlag := flag.Int("port", 3000, "Port to run the server on")
 	watchFlag := flag.Bool("watch", true, "Enable hot reload file watching")
-	
+	rateLimitFlag := flag.Float64("rate-limit", 0, "Rate limit in requests per second (default 0 = disabled)")
+	burstFlag := flag.Int("burst", 0, "Burst size for rate limiting (default 0; only used if rate-limit > 0)")
+
 	// Parse flags from os.Args[2:] (skip "start" command)
 	flag.CommandLine.Parse(os.Args[2:])
 
@@ -63,104 +62,32 @@ func main() {
 	}
 	configFile := args[0]
 
+	host := *hostFlag
 	port := *portFlag
 	watch := *watchFlag
+	rateLimit := *rateLimitFlag
+	burst := *burstFlag
 
-	// Check if config file exists
-	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: Config file '%s' not found\n", configFile)
-		os.Exit(1)
-	}
-
-	// Read config file
-	data, err := os.ReadFile(configFile)
+	// Load and validate configuration
+	configResult, err := config.LoadConfig(configFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading config file: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Parse JSON config
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing config file: %v\n", err)
+	// Print routes table
+	configResult.PrintRoutesTable()
+
+	// Resolve symlinks for security (needed for file watching)
+	resolvedConfigFile, err := filepath.EvalSymlinks(configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving config file path: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Validate and filter routes
-	validRoutes := make(map[string]Route)
-	skippedCount := 0
-
-	for path, route := range config.Routes {
-		// Validate method
-		method := strings.ToUpper(route.Method)
-		validMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
-		isValidMethod := false
-		for _, validMethod := range validMethods {
-			if method == validMethod {
-				isValidMethod = true
-				break
-			}
-		}
-
-		if !isValidMethod {
-			log.Printf("Warning: Unsupported method '%s' for route '%s', skipping", route.Method, path)
-			skippedCount++
-			continue
-		}
-
-		// Validate status code (must be valid HTTP status)
-		if route.Status != 0 && (route.Status < 100 || route.Status > 599) {
-			log.Printf("Warning: Invalid status code %d for route '%s', using default 200", route.Status, path)
-			route.Status = 200
-		}
-
-		// Validate delay (must be non-negative)
-		if route.Delay < 0 {
-			log.Printf("Warning: Negative delay %d for route '%s', using 0", route.Delay, path)
-			route.Delay = 0
-		}
-
-		validRoutes[path] = route
-	}
-
-	// Print table header
-	fmt.Printf("Loaded %d mock routes", len(validRoutes))
-	if skippedCount > 0 {
-		fmt.Printf(" (skipped %d invalid routes)", skippedCount)
-	}
-	fmt.Println()
-	fmt.Println("┌────────┬──────────────────────────┬────────┬────────┐")
-	fmt.Println("│ METHOD │ PATH                     │ STATUS │ DELAY  │")
-	fmt.Println("├────────┼──────────────────────────┼────────┼────────┤")
-
-	// Print routes in table format
-	for path, route := range validRoutes {
-		method := strings.ToUpper(route.Method)
-		status := route.Status
-		if status == 0 {
-			status = 200
-		}
-
-		delayStr := ""
-		if route.Delay > 0 {
-			delayStr = fmt.Sprintf("%dms", route.Delay)
-		} else {
-			delayStr = "-"
-		}
-
-		// Truncate long paths
-		displayPath := path
-		if len(displayPath) > 24 {
-			displayPath = displayPath[:21] + "..."
-		}
-
-		fmt.Printf("│ %-6s │ %-24s │ %-6d │ %-6s │\n", method, displayPath, status, delayStr)
-	}
-	fmt.Println("└────────┴──────────────────────────┴────────┴────────┘")
 
 	// Convert valid routes to server.Route format
 	serverRoutes := make(map[string]server.Route)
-	for path, route := range validRoutes {
+	for path, route := range configResult.ValidRoutes {
 		serverRoutes[path] = server.Route{
 			Method:   route.Method,
 			Status:   route.Status,
@@ -169,26 +96,89 @@ func main() {
 		}
 	}
 
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Create reload callback
 	onReload := func(newConfig map[string]server.Route) {
 		fmt.Printf("🔄 config reloaded (%d routes)\n", len(newConfig))
 	}
 
-	// Start the server
-	mockServer := server.New(serverRoutes, port, onReload)
+	// Start the server with rate limiting configuration
+	mockServer := server.New(serverRoutes, host, port, onReload)
+	if rateLimit > 0 {
+		mockServer.SetRateLimit(rateLimit, burst)
+		log.Printf("Rate limiting enabled: %.2f req/s, burst: %d", rateLimit, burst)
+	}
+
+	// Channel to track file watcher lifecycle
+	watcherDone := make(chan struct{})
 
 	// Start file watcher for hot reload if enabled
 	if watch {
-		go watchConfigFile(configFile, mockServer)
+		go func() {
+			defer close(watcherDone)
+			watchConfigFile(ctx, resolvedConfigFile, mockServer)
+		}()
+	} else {
+		// If no watcher, close the channel immediately
+		close(watcherDone)
 	}
 
-	if err := mockServer.Start(); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	// Start server in goroutine
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- mockServer.Start()
+	}()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Wait for either server error or shutdown signal
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
+	case sig := <-sigChan:
+		log.Printf("Received signal %v, initiating graceful shutdown...", sig)
+
+		// Cancel context to stop file watcher
+		cancel()
+
+		// Wait for file watcher to stop (with timeout)
+		select {
+		case <-watcherDone:
+			log.Println("File watcher stopped")
+		case <-time.After(2 * time.Second):
+			log.Println("File watcher stop timeout")
+		}
+
+		// Create shutdown context with 10 second timeout
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+
+		// Shutdown server gracefully
+		if err := mockServer.Shutdown(shutdownCtx); err != nil {
+			log.Printf("Server shutdown error: %v", err)
+			os.Exit(1)
+		}
+
+		log.Println("Server shutdown complete")
 	}
 }
 
 // watchConfigFile watches the config file for changes and reloads the server
-func watchConfigFile(configFile string, mockServer *server.Server) {
+func watchConfigFile(ctx context.Context, configFile string, mockServer *server.Server) {
+	// Store the original resolved path for symlink safety
+	originalResolvedPath, err := filepath.EvalSymlinks(configFile)
+	if err != nil {
+		log.Printf("Error resolving config file path for watching: %v", err)
+		return
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("Error creating watcher: %v", err)
@@ -222,6 +212,10 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Context cancelled, stop watching
+			log.Println("Stopping file watcher due to shutdown signal")
+			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
@@ -241,11 +235,22 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 				}
 
 				if eventFile == configFileName {
+					// Security check: verify the resolved path hasn't changed (symlink safety)
+					currentResolvedPath, err := filepath.EvalSymlinks(configFile)
+					if err != nil {
+						log.Printf("Error resolving config file path during reload: %v", err)
+						continue
+					}
+					if currentResolvedPath != originalResolvedPath {
+						log.Printf("Warning: Config file path resolution changed, ignoring reload for security")
+						continue
+					}
+
 					// Debounce reload to avoid multiple rapid reloads
 					if reloadTimer != nil {
 						reloadTimer.Stop()
 					}
-					reloadTimer = time.AfterFunc(100*time.Millisecond, func() {
+					reloadTimer = time.AfterFunc(200*time.Millisecond, func() {
 						reloadConfig(configFile, mockServer)
 					})
 				}
@@ -262,57 +267,16 @@ func watchConfigFile(configFile string, mockServer *server.Server) {
 
 // reloadConfig reloads the configuration and updates the server
 func reloadConfig(configFile string, mockServer *server.Server) {
-	// Read config file
-	data, err := os.ReadFile(configFile)
+	// Load and validate configuration using the config package
+	configResult, err := config.LoadConfig(configFile)
 	if err != nil {
-		log.Printf("Error reading config file during reload: %v", err)
+		log.Printf("Error loading config file during reload: %v", err)
 		return
-	}
-
-	// Parse JSON config
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Printf("Error parsing config file during reload: %v", err)
-		return
-	}
-
-	// Validate and filter routes (same logic as main)
-	validRoutes := make(map[string]Route)
-	for path, route := range config.Routes {
-		// Validate method
-		method := strings.ToUpper(route.Method)
-		validMethods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
-		isValidMethod := false
-		for _, validMethod := range validMethods {
-			if method == validMethod {
-				isValidMethod = true
-				break
-			}
-		}
-
-		if !isValidMethod {
-			log.Printf("Warning: Unsupported method '%s' for route '%s', skipping", route.Method, path)
-			continue
-		}
-
-		// Validate status code
-		if route.Status != 0 && (route.Status < 100 || route.Status > 599) {
-			log.Printf("Warning: Invalid status code %d for route '%s', using default 200", route.Status, path)
-			route.Status = 200
-		}
-
-		// Validate delay
-		if route.Delay < 0 {
-			log.Printf("Warning: Negative delay %d for route '%s', using 0", route.Delay, path)
-			route.Delay = 0
-		}
-
-		validRoutes[path] = route
 	}
 
 	// Convert to server.Route format
 	serverRoutes := make(map[string]server.Route)
-	for path, route := range validRoutes {
+	for path, route := range configResult.ValidRoutes {
 		serverRoutes[path] = server.Route{
 			Method:   route.Method,
 			Status:   route.Status,
